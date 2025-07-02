@@ -19,7 +19,8 @@ def generate_mask(image_path, model, mask_path):
             bin_mask = cv2.resize(bin_mask, (image.shape[1], image.shape[0]))
             mask = cv2.bitwise_or(mask, bin_mask)
     # Optional: visualize mask over original image
-    cv2.imwrite(mask_path, mask)
+    masked_image = cv2.bitwise_and(image, image, mask=mask)
+    cv2.imwrite(mask_path, masked_image)
     return mask_path
 
 image_path = 'image.png'
@@ -31,22 +32,24 @@ generate_mask(image_path, model, mask_path)
 mask = cv2.imread(mask_path, 0)  # Load as grayscale
 image = cv2.imread(image_path)
 
+# Desired color (B, G, R) - let's say red
+color = (0, 0, 255)
 
-# Define overlay color (BGR)
-overlay_color = (0, 0, 255)  # Red
-alpha = 0.5
 
-# Create color overlay
-color_layer = np.full_like(image, overlay_color, dtype=np.float32)
 
-# Prepare mask
-mask_bool = (mask == 255).astype(np.float32)  # (H, W)
-mask_3ch = np.repeat(mask_bool[:, :, None], 3, axis=2)  # (H, W, 3)
+# Broadcast mask to 3D
+overlay_color = (0, 0, 255)  # Red in BGR
+color_layer = np.full_like(image, overlay_color)
 
-# Convert image to float
-image = image.astype(np.float32)
+# Set transparency (alpha): 0 = no effect, 1 = full red
+alpha = 0.5  # You can tune this
 
-# Blend where mask is active
-blended = image * (1 - alpha * mask_3ch) + color_layer * (alpha * mask_3ch)
-blended = np.clip(blended, 0, 255).astype(np.uint8)
+# Expand mask to 3 channels
+mask_3ch = (mask == 255)[:, :, None].astype(np.uint8)
+
+# Blend: only where mask == 255
+blended = image.copy()
+blended = blended.astype(np.float32)
+blended = blended * (1 - alpha * mask_3ch) + color_layer * (alpha * mask_3ch)
+blended = blended.astype(np.uint8)
 cv2.imwrite("result.png", blended)
