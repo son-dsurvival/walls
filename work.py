@@ -3,50 +3,53 @@ import cv2
 from ultralytics import YOLO
 
 # Function to generate masks and save the mask image
-def generate_mask(image_path, model, mask_path):
+def generate_mask(image_path, model, mask_path, y=282, x=190):
+    # 1) Run the SEGMENTATION model (must be a *-seg model, not detect-only)
     results = model(image_path)
-    result = results[0]  # Perform object detection
-    image= cv2.imread(image_path)
-    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    r = results[0]
+    image = cv2.imread(image_path)
+    H, W = image.shape[:2]
 
-# Loop through each detected object and apply segmentation mask
-    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    if r.masks is None:
+        raise ValueError("Model returned no masks. Use a segmentation model (e.g., yolov8n-seg).")
 
-# Loop over detected masks
-    for seg_mask, cls in zip(result.masks.data, result.boxes.cls):
-        if int(cls) == 0:  # Class 0 = 'wall'
-            bin_mask = (seg_mask.cpu().numpy() > 0.5).astype(np.uint8) * 255
-            bin_mask = cv2.resize(bin_mask, (image.shape[1], image.shape[0]))
-            mask = cv2.bitwise_or(mask, bin_mask)
-    # Optional: visualize mask over original image
-    cv2.imwrite(mask_path, mask)
-    return mask_path
+    # 2) Build an integer-labeled mask: 0=background, 1..N = instances
+    label_mask = np.zeros((H, W), dtype=np.uint16)
+    for i, m in enumerate(r.masks.data):                   # m: (h,w) tensor
+        m_np = m.cpu().numpy().astype(np.uint8)            # 0/1
+        m_np = cv2.resize(m_np, (W, H), interpolation=cv2.INTER_NEAREST)
+        label_mask[m_np.astype(bool)] = i + 1              # overwrite is fine
 
-image_path = 'image.png'
+    # 3) Pick the clicked instance and black-out everything else
+    label_val = int(label_mask[y, x])                      # NOTE: (row=y, col=x)
+    if label_val == 0:
+        raise ValueError("Clicked background (label 0).")
+    seg_mask = (label_mask == label_val)
+
+    if image.ndim == 2:                                    # grayscale
+        seg_image = np.where(seg_mask, image, 0)
+    else:                                                  # BGR (OpenCV)
+        seg_image = np.where(seg_mask[..., None], image, 0)
+
+    cv2.imwrite(mask_path, seg_mask)
+    return seg_mask
+
+image_path = 'WhatsApp Image 2025-08-09 at 13.58.55_38625e19.jpg'
 model = YOLO("best.pt")
 mask_path = "mask.png"
 
 # Generate the mask and read it back as grayscale
-generate_mask(image_path, model, mask_path)
-mask = cv2.imread(mask_path, 0)  # Load as grayscale
-image = cv2.imread(image_path)
+mask=generate_mask(image_path, model, mask_path)
 
+image = cv2.imread(image_path)  # BGR
+overlay = image.copy()
+colour=(0, 0, 255)
+alpha=0.5
+# Apply pure colour to the segment region
+overlay[mask] = colour
 
-# Define overlay color (BGR)
-overlay_color = (0, 0, 255)  # Red
-alpha = 0.5
+# Blend overlay with original image
+blended = cv2.addWeighted(image, 1 - alpha, overlay, alpha, 0)
 
-# Create color overlay
-color_layer = np.full_like(image, overlay_color, dtype=np.float32)
-
-# Prepare mask
-mask_bool = (mask == 255).astype(np.float32)  # (H, W)
-mask_3ch = np.repeat(mask_bool[:, :, None], 3, axis=2)  # (H, W, 3)
-
-# Convert image to float
-image = image.astype(np.float32)
-
-# Blend where mask is active
-blended = image * (1 - alpha * mask_3ch) + color_layer * (alpha * mask_3ch)
-blended = np.clip(blended, 0, 255).astype(np.uint8)
+# Save the result with colour baked in
 cv2.imwrite("result.png", blended)
